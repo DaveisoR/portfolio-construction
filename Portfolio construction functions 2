@@ -1,0 +1,186 @@
+DD <- function(level.series, inp.sundry){
+  drawdown <- vector(mode = "double", length = inp.sundry$periods * inp.sundry$holding)
+  for(x in 1:(inp.sundry$periods * inp.sundry$holding)){
+    drawdown[x] <- ((level.series[x] - max(level.series[1:x])) / max(level.series[1:x]))
+  }
+  return(drawdown)
+}
+
+graph.DD <- function(drawdown.data, names.list, inp.sundry, resultsdate){
+  a <- length(names.list)
+  v <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = a)
+  for(x in 1:a){
+    v[ , x] <- drawdown.data[[x]]
+  }
+  df.results <- data.frame(v, row.names = as.Date(resultsdate), check.rows = FALSE, check.names = TRUE)
+  colnames(df.results) <- names.list
+  sol <- as.data.frame(df.results) %>%
+    gather(weighting, values)
+  sol$time <- rownames(df.results)
+  d <- plot_ly(sol, x = ~time, y = ~values, type = "scatter", mode = "lines", color = ~weighting) %>%
+    layout(title = "Comparing weightings", xaxis = list(nticks = 10, title = FALSE))
+  return(d)
+}
+
+###Note <br> creates a new line
+
+graph.hovershares <- function(levels.data, float.data, names.list, inp.sundry, resultsdate){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  a <- length(levels.data)+length(float.data)
+  v <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = a)
+  for(x in 1:(a-(length(float.data)))){
+    v[ , x] <- levels.data[[x]]
+  }
+  v[ , 3] <- float.data[[1]][ , 1]
+  v[ , 4] <- float.data[[2]][ , 1]
+  v[ , 5] <- float.data[[3]][ , 1]
+  v[ , 6] <- float.data[[4]][ , 1]
+  df.results <- data.frame(v, row.names = as.Date(resultsdate), check.rows = FALSE, check.names = TRUE)
+  colnames(df.results) <- c(names.list, "bfshare", "wfshare","bafshare",  "wafshare")
+  sol <- as.data.frame(df.results)# %>%
+  # gather(weighting, values)
+  sol$time <- rownames(df.results)
+  d <- plot_ly(sol, x = ~time, y = ~Factor, type = "scatter", mode = "lines", name = "Factor", hoverinfo = "text", text =~paste("Best factor performer:", bfshare, "<br>Worst factor performer:", wfshare, "<br>Factor level: ", Factor)) %>%
+    layout(title = "Factor vs AntiFactor", xaxis = list(nticks = 10, title = FALSE), yaxis = list(nticks = 0.1, title = FALSE))%>%
+    add_trace(sol, x = ~time, y = ~AntiFactor, type = "scatter", mode = "lines", name = "AntiFactor", hoverinfo = "text", text = ~paste("Best antifactor performer:", bafshare, "<br>Worst antifactor performer:", wafshare,  "<br>AntiFactor level: ", AntiFactor))
+  return(d)
+}
+
+###########################################
+
+share.performance <- function(inp.sundry, inp.Returns){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  best.f <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = f.split)
+  worst.f <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = f.split)
+  best.af <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = f.split)
+  worst.af <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = f.split)
+  hld <- vector(mode = "list", length = inp.sundry$periods)
+  for(y in seq_along(hld)) {
+    hld[[y]] <- inp.Returns[((inp.sundry$lookback+1)+((inp.sundry$holding)*(y-1))):((inp.sundry$lookback+inp.sundry$holding)+(inp.sundry$holding*(y-1))), ]
+  }
+  lb <- vector(mode = "list", length = inp.sundry$periods)
+  for(x in seq_along(lb)) {
+    lb[[x]] <- inp.Returns[(1+(inp.sundry$holding*(x-1))):(inp.sundry$lookback+(inp.sundry$holding*(x-1))-inp.sundry$gap), ]
+  }
+  nhld <- hld
+  for(x in 1:inp.sundry$periods){
+    for(y in 1:inp.sundry$shares){
+      if(rank(colSums(lb[[x]]))[y]>12){
+        colnames(nhld[[x]])[y] <- 1} else{ #1s are factor
+          colnames(nhld[[x]])[y] <- 2
+        }
+    }
+  }
+  for(x in 1:inp.sundry$periods){
+    #Best performers of antifactor
+    best.af[(((x-1)*inp.sundry$holding)+1):(x*inp.sundry$holding), ] <- t(replicate(inp.sundry$holding, colnames(inp.Returns)[order(colnames(nhld[[x]]), colSums(hld[[x]]), decreasing = TRUE)]))[ ,1:f.split]
+    #Worst performers of factor
+    worst.f[(((x-1)*inp.sundry$holding)+1):(x*inp.sundry$holding), ] <- t(replicate(inp.sundry$holding, colnames(inp.Returns)[order(colnames(nhld[[x]]), colSums(hld[[x]]), decreasing = FALSE)]))[ ,1:f.split]
+    #Worst performers of antifactor
+    worst.af[(((x-1)*inp.sundry$holding)+1):(x*inp.sundry$holding), ] <- t(replicate(inp.sundry$holding, colnames(inp.Returns)[order(colnames(nhld[[x]]), -colSums(hld[[x]]), decreasing = TRUE)]))[ ,1:f.split]
+    #Best performers of factor
+    best.f[(((x-1)*inp.sundry$holding)+1):(x*inp.sundry$holding), ] <- t(replicate(inp.sundry$holding, colnames(inp.Returns)[order(colnames(nhld[[x]]), -colSums(hld[[x]]), decreasing = FALSE)]))[ ,1:f.split]
+  }
+  float.list <- vector(mode = "list", length = 4)
+  float.list[[1]] <- best.f
+  float.list[[2]] <- worst.f
+  float.list[[3]] <- best.af
+  float.list[[4]] <- worst.af
+  return(float.list)
+}
+
+
+#######################Cross sectional standard dev######################
+
+csd.list <- function(inp.Returns, inp.sundry){
+  ordered.returns <- (setup.mom(inp.Returns, inp.sundry))
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  cross.stdev.factor <- rowSds(as.matrix(ordered.returns[ , 1:f.split]))
+  cross.stdev.antifactor <- rowSds(as.matrix(ordered.returns[ , (inp.sundry$shares-f.split+1):inp.sundry$shares]))
+  cross.std.dev.list <- vector(mode = "list", length = 2)
+  cross.std.dev.list[[1]] <- cross.stdev.factor
+  cross.std.dev.list[[2]] <- cross.stdev.antifactor
+  
+  smooth.f <- vector(mode = "double", length = inp.sundry$periods*inp.sundry$holding)
+  smooth.af <- vector(mode = "double", length = inp.sundry$periods*inp.sundry$holding)
+  for(x in 1:(inp.sundry$periods*inp.sundry$holding)){
+    smooth.f[x] <- round(mean(cross.stdev.factor[max((x-10), 1):min((x+10), (inp.sundry$periods*inp.sundry$holding))]), 4)
+    smooth.af[x] <- round(mean(cross.stdev.antifactor[max((x-21), 1):x]), 4)
+  }
+  smooth.list <- vector(mode = "list", length = 2)
+  smooth.list[[1]] <- smooth.f
+  smooth.list[[2]] <- smooth.af
+  return(smooth.list)
+}
+#########################################################################
+
+graph.hovershares2 <- function(levels.data, float.data, csdlist, names.list, inp.sundry, resultsdate){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  a <- length(levels.data)+length(float.data)+length(csdlist)
+  v <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = a)
+  for(x in 1:2){
+    v[ , x] <- levels.data[[x]]
+  }
+  for(x in 1:4){
+    v[ , (x+2)] <- float.data[[x]][ , 1]
+  }
+  for(x in 1:2){
+    v[ , (x+6)] <- csdlist[[x]]
+  }
+  df.results <- data.frame(v, row.names = as.Date(resultsdate), check.rows = FALSE, check.names = TRUE)
+  colnames(df.results) <- c(names.list, "bfshare", "wfshare","bafshare",  "wafshare", "csdfactor", "csdantifactor")
+  sol <- as.data.frame(df.results)# %>%
+  # gather(weighting, values)
+  sol$time <- rownames(df.results)
+  
+  ay <- list(
+    tickfont = list(color = "red"),
+    overlaying = "y",
+    side = "right",
+    title = "cross-sectional sd"
+  )
+  
+  d <- plot_ly(sol, x = ~time, y = ~Factor, type = "scatter", mode = "lines", name = "Factor", hoverinfo = "text", text =~paste("Best factor performer:", bfshare, "<br>Worst factor performer:", wfshare, "<br>Factor level: ", Factor)) %>%
+    add_trace(sol, x = ~time, y = ~AntiFactor, type = "scatter", mode = "lines", name = "AntiFactor", hoverinfo = "text", text = ~paste("Best antifactor performer:", bafshare, "<br>Worst antifactor performer:", wafshare,  "<br>AntiFactor level: ", AntiFactor))%>%
+    add_trace(sol, x = ~time, y = ~csdfactor, yaxis = "y2", type = "scatter", mode = "lines", name = "Cross-sectional SD Factor", hoverinfo = "text", text = ~paste("Cross-sectional SD Factor:", csdfactor))%>%
+    add_trace(sol, x = ~time, y = ~csdantifactor, yaxis = "y2", type = "scatter", mode = "lines", name = "Cross-sectional SD AntiFactor", hoverinfo = "text", text = ~paste("Cross-sectional SD AntiFactor:", csdantifactor))%>%
+    layout(title = "Factor vs AntiFactor", xaxis = list(nticks = 10, title = FALSE), yaxis = list(nticks = 0.1, title = FALSE), yaxis2 = ay)
+  return(d)
+}
+
+##########################CHURN CALC#########################
+
+  ## weights.ew(setupmom(Returns, sundry), sundry) for daily weights
+  ## setup.mom(Returns, sundry) ***** for daily returns
+  ## floatlist[[1]] and floatlist[[3]] ***** for daily codes Factor and Antifactor
+  ##need to get starting weight per period based on ew, lin or erc. then grow those weights at returns from setup mom for the rest of the period.
+weights.ew <- function(inp.sortedreturns, inp.sundry){ 
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  weights.f <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = f.split)
+  weights.af <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = f.split)
+  hld <- vector(mode = "list", length = inp.sundry$periods)
+  for(y in seq_along(hld)) {
+    hld[[y]] <- inp.sortedreturns[(1+((inp.sundry$holding)*(y-1))):(inp.sundry$holding+(inp.sundry$holding*(y-1))), ]
+    }
+  for(x in 1:inp.sundry$periods){
+    weights.f[1+((x-1)*inp.sundry$holding), ] <- 1/f.split
+    for(y in 2:inp.sundry$holding){
+      weights.f[y+((x-1)*inp.sundry$holding), ] <- weights.f[y-1+((x-1)*inp.sundry$holding), 1:f.split]*(1+hld[[x]][y-1, 1:f.split])
+    }
+  }
+  for(x in 1:inp.sundry$periods){
+    weights.af[1+((x-1)*inp.sundry$holding), ] <- 1/f.split
+    for(y in 2:inp.sundry$holding){
+      weights.af[y+((x-1)*inp.sundry$holding), ] <- weights.af[y-1+((x-1)*inp.sundry$holding), ]*(1+hld[[x]][y-1, (inp.sundry$shares-f.split+1):inp.sundry$shares])
+    }
+  }
+  w.f <- weights.f/rowSums(weights.f)
+  w.af <- weights.af/rowSums(weights.af)
+  dailyweights <- vector(mode = "list", length = 2)
+  dailyweights[[1]] <- w.f
+  dailyweights[[2]] <- w.af
+  return(dailyweights)
+}
+
+########################PRACTICE
+
