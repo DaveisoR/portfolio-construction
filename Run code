@@ -1,0 +1,134 @@
+source("D:/Research/portfolio construction library.R")
+rm(list = ls())
+date <- read.csv("D:/Research/R data/dates 2.csv", header = TRUE)
+t <- nrow(date)
+d <- as.Date(date[ , 1])
+r <- read.csv("D:/Research/R data/ret no dates TR.csv", header = TRUE)
+Relative.volatility <- read.csv("D:/Research/R data/relative volatility no dates.csv", header = TRUE)
+Volume <- read.csv("D:/Research/R data/volume no dates.csv", header = TRUE)
+stderr <- Relative.volatility/(Volume^0.5)
+
+
+startdate <- "2007-01-02" #must use correct format
+da <- which(date==startdate)
+Returns <- r[da:t, ]
+to <- nrow(Returns)
+shares <- ncol(Returns)
+holding <- 21
+lookback <- 252
+min.weight <- 0.01 #only for linweight for the time being
+max.weight <- 0.15 #only for linweight for the time being
+gap <- 0   #gap is in days and is always subtracted from the lookback period. In other words if lookback is 20 and gap is 10 then you are still only using the 10 days before the most recent 10 days to calc
+covariance.weight <- 0 #alternatives are 1 for "weighted" and 0 for "unweighted"
+percentile.split <- 1 #split = 1 uses whole data set for both f and af
+periods <- trunc((to-lookback)/holding)
+total <- (periods*holding)+lookback
+date <- d[da:(da+total)]
+results.date <- date[(lookback+1):total]
+rm(t, r, to, d, da, Volume, Relative.volatility)
+sundry <- as.list(c(shares, holding, lookback, min.weight, max.weight, gap, percentile.split, periods, total, covariance.weight))  #cointains all info for functions so that they can become self-contained
+names(sundry) <- c("shares", "holding", "lookback", "min", "max", "gap", "psplit", "periods", "total", "weighttype")
+
+source("D:/Research/portfolio construction functions.R") #replace with your pathway to functions script
+#for linear weighting use.linweight for equal weighting delete .linweight
+#for erc weighting use Factor.ret.ercweight and add Returns as part of your input
+#for low vol use setup.lv for momentum use setup.mom
+#####
+
+#if you want to compare factor and antifactor use below code
+
+# f <- Factor.ret(setup.mom(), percentile.split)
+# f.level <- Factor.calc(f)
+# af <- AntiFactor.ret(setup.mom(), percentile.split)
+# af.level <- AntiFactor.calc(af)
+
+# output(f, af, f.level, af.level)
+
+# to compare weights series (to change between low vol and mom change the setup from setup.lv to setup.mom)
+
+mom.ew <- Factor.ret(setup.mom(Returns, sundry), sundry)
+
+mom.lin <- Factor.ret.linweight(setup.lv(Returns, sundry), sundry)
+
+mom.erc <- Factor.ret.ercweight(Returns, setup.lv(Returns, sundry), sundry)
+
+mom.erc.w <- Factor.ret.ercweight.w(Returns, stderr, setup.lv(Returns, sundry), sundry)
+
+ew.level <- Factor.calc(mom.ew, sundry)
+
+lin.level <- Factor.calc(mom.lin, sundry)
+
+erc.level <- Factor.calc(mom.erc, sundry)
+
+erc.w.level <- Factor.calc(mom.erc.w, sundry)
+
+source("D:/Research/portfolio construction functions2.R") 
+
+ew.drawdown <- DD(ew.level, sundry)
+
+lin.drawdown <- DD(lin.level, sundry)
+
+erc.drawdown <- DD(erc.level, sundry)
+
+erc.w.drawdown <- DD(erc.w.level, sundry)
+
+returns.list <- vector(mode = "list", length = 4)
+returns.list[[1]] <- mom.ew
+returns.list[[2]] <- mom.lin
+returns.list[[3]] <- mom.erc
+returns.list[[4]] <- mom.erc.w
+
+names <- vector(mode = "list", length = 4)
+names[[1]] <- "Equal Weighting"
+names[[2]] <- "Linear Weighting"
+names[[3]] <- "ERC Weighting"
+names[[4]] <- "Weighted ERC Weighting"
+
+levels.list <- vector(mode = "list", length = 4)
+levels.list[[1]] <- ew.level
+levels.list[[2]] <- lin.level
+levels.list[[3]] <- erc.level
+levels.list[[4]] <- erc.w.level
+
+DD.list <- vector(mode = "list", length = 4)
+DD.list[[1]] <- ew.drawdown
+DD.list[[2]] <- lin.drawdown
+DD.list[[3]] <- erc.drawdown
+DD.list[[4]] <- erc.w.drawdown
+
+float <- Factor.share.performance.mom(Returns, sundry)
+
+output.m(returns.list, levels.list, DD.list, names, sundry)
+
+graph.weights(levels.list, names, sundry, results.date)
+
+graph.DD(DD.list, names, sundry, results.date)
+
+graph.hovershares(levels.list, float, names, sundry, results.date, "best")
+
+
+
+#### Factor and antifactor code
+
+# v <- matrix(data = NA, nrow = (total-lookback), ncol = 4)
+# v[ , 1] <- f
+# v[ , 2] <- af
+# v[ , 3] <- f.level
+# v[ , 4] <- af.level
+# df.results <- data.frame(v, row.names = as.Date(results.date), check.rows = FALSE, check.names = TRUE)
+# colnames(df.results) <- c("Factor", "AntiFactor", "Factor Level", "AntiFactor Level")
+
+
+# sol <- as.data.frame(df.results[3:4]) %>%
+#   gather(type, values)
+# sol$time <- rownames(df.results) #this tells the dataframe "sol" to add a column called "time" and fill it with the row names of the other dataframe "df.results"
+# #### head(sol) head is used to show the first 6 rows of any data set
+# ####    This makes a new dataframe that is long the way plotly likes it. also look at mutate
+# d <- plot_ly(sol, x = ~time, y = ~values, type = "scatter", mode = "lines", color = ~type) # seems to work better with more than two lines
+# d
+#
+
+####atm erc has highest risk, then ew, then linear weights which seems backwards...
+####look to add min and max weights for erc too and find out why the risk relationships seem to be backwards
+####create drawdown to df and the use to change colour according to drawdown period
+####look to use different covariance calculation methods
