@@ -1,0 +1,400 @@
+cat(' This script contains functions created by David that include:
+
+setup.lv and setup.mom - these functions break the data into overlapping lookback and distinct holding periods based on the data supplied to "sundry"
+They then sort the holding period data according to - the cumulative returns over the lookback for setup.mom (descending order) and - the standard deviation over the lookback period for setup.lv (ascending order).
+the returns that are output from this function will be sorted into columns according to the relative positions based on the sorting criterion so columns will no longer be attributable to individual shares but rather 1, 2, 3 etc.. based on momentum or std dev (column 1 for setup.mom would be highest cumulative returns over the previous 252 days (based on lookback) and would not be the same shares returns for each holding period).
+
+Factor.ret and AntiFactor.ret - these functions calculate the portfolio returns for the factor (winners or low vol) and antifactor (losers or high vol) portfolios respectively.
+The process involves creating (unlinked) levels by starting each day in each holding period with (1+daily return) and each subsequent day = (unlinked level t-1 * (1+daily return)).
+Weighting schemes are applied at this level of the portfolio performance calculation which include equally weighted (default), linear weighted (for Factor.ret.linweight and AntiFactor.ret.linweight), and equal risk contribution (for Factor.ret.ercweight and AntiFactor.ret.ercweight). The code for calculating linear weights and erc weights are contained in linear.weighting and ERC.w).
+The weightings are applied by multiplying the appropriate weight across the first day in the holding period so if the weights are 0.1, 0.4 and 0,5 then share A B and C will have their first daily return multiplied by those weights.
+The Factor levels are then calculated by summing each row and minusing 1 for the first day and then using the simple arithmetic return for each subsequent day (level 2- level 1)/level 1. The output is the factor return series
+
+Factor.calc and AntiFactor.calc - these functions take the returns series calculated for a portfolio and turn it into a price series starting at R1
+
+output.m - this function calculates annualised standard deviations and geometric returns
+
+graph.weights - this function plots the outputs of the various price series against time
+')
+
+
+
+colSdColMeans <- function(x, na.rm=TRUE) {
+  if (na.rm) {
+    n <- colSums(!is.na(x))
+  } else {
+    n <- nrow(x)
+  }
+  colVar <- colMeans(x*x, na.rm=na.rm) - (colMeans(x, na.rm=na.rm))^2
+  return(sqrt(colVar * n/(n-1)))
+}
+attr(colSdColMeans, "comment") <- "calculates the std deviation of each column"
+
+setup.lv <- function(inp.Returns, inp.sundry) {
+  hld <- vector(mode = "list", length = inp.sundry$periods)
+  for(y in seq_along(hld)) {
+    hld[[y]] <- inp.Returns[((inp.sundry$lookback+1)+((inp.sundry$holding)*(y-1))):((inp.sundry$lookback+inp.sundry$holding)+(inp.sundry$holding*(y-1))), ]
+  }
+  lb <- vector(mode = "list", length = inp.sundry$periods)
+  for(x in seq_along(lb)) {
+    lb[[x]] <- inp.Returns[(1+(inp.sundry$holding*(x-1))):(inp.sundry$lookback+(inp.sundry$holding*(x-1))-inp.sundry$gap), ]
+  }
+  results <- vector(mode = "list", length = inp.sundry$periods)
+  for(x in seq_along(results)) {
+    results[[x]] <- hld[[x]][ , order(colSdColMeans(lb[[x]], na.rm=TRUE), decreasing = FALSE)]
+  }
+  for(b in 1:inp.sundry$periods){
+    for(a in 1:inp.sundry$shares){
+      names(results[[b]])[a] <- a
+    }
+  }
+return(list.rbind(results))
+}
+
+setup.mom <- function(inp.Returns, inp.sundry) {
+  hld <- vector(mode = "list", length = inp.sundry$periods)
+  for(y in seq_along(hld)) {
+    hld[[y]] <- inp.Returns[((inp.sundry$lookback+1)+((inp.sundry$holding)*(y-1))):((inp.sundry$lookback+inp.sundry$holding)+(inp.sundry$holding*(y-1))), ]
+  }
+  lb <- vector(mode = "list", length = inp.sundry$periods)
+  for(x in seq_along(lb)) {
+    lb[[x]] <- inp.Returns[(1+(inp.sundry$holding*(x-1))):(inp.sundry$lookback+(inp.sundry$holding*(x-1))-inp.sundry$gap), ]
+  }
+  results <- vector(mode = "list", length = inp.sundry$periods)
+  for(x in seq_along(results)) {
+    results[[x]] <- hld[[x]][ , order(colSums(lb[[x]], na.rm=TRUE), decreasing = TRUE)]
+  }
+  for(b in 1:inp.sundry$periods){
+    for(a in 1:inp.sundry$shares){
+      names(results[[b]])[a] <- a
+    }
+  }
+  return(as.matrix(list.rbind(results)))
+}
+
+Factor.ret <- function(input, inp.sundry){
+  Factor.returns <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  results.level <- input #try to make it like the code below
+  #results.level <- matrix(data = NA, nrow = nrow(input), ncol = ncol(input))  
+  for(e in 0:(inp.sundry$periods-1)){
+    results.level[(e*inp.sundry$holding)+1, ] <- input[(e*inp.sundry$holding)+1, ] + 1
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      results.level[c, ] <- ((1 + input[c, ])*results.level[c-1, ])
+    }
+    f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+    Factor.level <- rowSums(results.level[ ,1:f.split])
+    Factor.returns[[((e*inp.sundry$holding)+1)]] <- ((Factor.level[[((e*inp.sundry$holding)+1)]] / f.split)-1)
+    for(d in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)) {
+      Factor.returns[[d]] <- ((Factor.level[[d]] - Factor.level[[(d-1)]])/Factor.level[[(d-1)]])
+    }
+  }
+  return(Factor.returns)
+}
+
+Factor.calc <- function(ret, inp.sundry) {
+  Fac <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  Fac[[1]] <- 1 + ret[[1]]
+  for(f in (2:(inp.sundry$periods*inp.sundry$holding))){
+    Fac[[f]] <- ((1 + ret[[f]]) * Fac[[f - 1]])
+  }
+  Factor <- round(Fac, 2)
+  return(Factor)
+}
+
+AntiFactor.ret <- function(input, inp.sundry){
+  AntiFactor.returns <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  results.level <- input  # try to make it like the code below
+  #results.level <- matrix(data = NA, nrow = nrow(input), ncol = ncol(input))
+  for(e in 0:(inp.sundry$periods-1)){
+    results.level[(e*inp.sundry$holding)+1, ] <- input[(e*inp.sundry$holding)+1, ] + 1
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      results.level[c, ] <- ((1 + input[c, ])*results.level[c-1, ])
+    }
+    f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+    AntiFactor.level <- rowSums(results.level[ ,((1+inp.sundry$shares-f.split):inp.sundry$shares)])
+    AntiFactor.returns[[((e*inp.sundry$holding)+1)]] <- ((AntiFactor.level[[((e*inp.sundry$holding)+1)]] / f.split)-1)
+    for(d in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)) {
+      AntiFactor.returns[[d]] <- ((AntiFactor.level[[d]] - AntiFactor.level[[(d-1)]])/AntiFactor.level[[(d-1)]])
+    }
+  }
+  return(AntiFactor.returns)
+}
+
+AntiFactor.calc <- function(ret, inp.sundry) {
+  AntiFac <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  AntiFac[[1]] <- 1+ret[[1]]
+  for(f in (2:(inp.sundry$periods*inp.sundry$holding))){
+    AntiFac[[f]] <- ((1+ret[[f]])*AntiFac[[f-1]])
+  }
+  AntiFactor <- round(AntiFac, 2)
+  return(AntiFactor)
+}
+
+output <- function(f, af, f.level, af.level, inp.sundry) {
+  print(paste("factor std dev - ", round(sd(f)*(252^0.5), 4)*100, "%"), quote = FALSE)
+  print(paste("anti factor std dev - ", round(sd(af)*(252^0.5), 4)*100, "%"), quote = FALSE)
+  print(paste("factor geo returns - ", round(((f.level[[(inp.sundry$holding*inp.sundry$periods)]]^(1/((inp.sundry$holding*inp.sundry$periods)/252)))-1), 4)*100, "%"), quote = FALSE)
+  print(paste("anti-factor geo returns - ", round(((af.level[[(inp.sundry$holding*inp.sundry$periods)]]^(1/((inp.sundry$holding*inp.sundry$periods)/252)))-1), 4)*100, "%"), quote = FALSE)
+}  ####need to fix up to look like output.m soon
+
+output.m <- function(list.ret, list.lev, drawdown.list, names.list, inp.sundry) {
+  n.ret <- length(list.ret)
+  for(x in 1:n.ret){
+    print(paste(names.list[[x]], "std dev - ", round(sd(list.ret[[x]])*(252^0.5), 4)*100, "%"), quote = FALSE)
+    print(paste(names.list[[x]], "drawdown - ", round(min(drawdown.list[[x]]), 4)*100, "%"), quote = FALSE)
+  }
+  for(y in 1:n.ret){
+    print(paste(names.list[[y]], "geo returns -", round(((list.lev[[y]][[(inp.sundry$holding*inp.sundry$periods)]]^(1/((inp.sundry$holding*inp.sundry$periods)/252)))-1), 4)*100, "%"), quote = FALSE)
+  }
+}
+
+linear.weighting <- function(inp.sundry){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  rank <- c(1:f.split)
+  b <- f.split*(1+((f.split-1)/2))
+  m <- ((inp.sundry$min*(b-f.split))-f.split+1)/(b-(f.split*f.split))
+  mi <- -(((((inp.sundry$max*f.split)-1)*(f.split-1))/(b-f.split))-inp.sundry$max)
+  if (f.split<19) {
+    ld <- -((mi-inp.sundry$max)/(f.split-1))
+    weights <- inp.sundry$max-((rank-1)*ld)} else if (f.split>19){
+      ld <- -((inp.sundry$min-m)/(f.split-1))
+      weights <- m-((rank-1)*ld)}
+  return(weights)
+}
+
+##########################
+
+Factor.ret.linweight <- function(input, inp.sundry){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  w <- linear.weighting(sundry)
+  Factor.returns <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  Factor.level <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  results.level <- input[ , 1:f.split]
+  for(e in 0:(inp.sundry$periods-1)){
+    results.level[(e*inp.sundry$holding)+1, ] <- (input[(e*inp.sundry$holding)+1, 1:f.split] + 1) * w
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      results.level[c, ] <- ((1 + input[c, 1:f.split])*results.level[c-1, 1:f.split])
+    }
+  }
+  Factor.level <- rowSums(results.level)
+  for(e in 0:(inp.sundry$periods-1)){
+    Factor.returns[(e*inp.sundry$holding)+1] <- (Factor.level[((e*inp.sundry$holding)+1)] - 1)
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      Factor.returns[c] <- (Factor.level[c] - Factor.level[c-1])/Factor.level[c-1]
+    }
+  }
+  return(Factor.returns)
+}
+###############
+
+AntiFactor.ret.linweight <- function(input, inp.sundry){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  w <- linear.weighting(inp.sundry)
+  AntiFactor.returns <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  AntiFactor.level <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  results.level <- input[ , (inp.sundry$shares-f.split+1):inp.sundry$shares]
+  for(e in 0:(inp.sundry$periods-1)){
+    results.level[(e*inp.sundry$holding)+1, ] <- (input[(e*inp.sundry$holding)+1, (inp.sundry$shares-f.split+1):inp.sundry$shares] + 1) * rev(w)
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      results.level[c, ] <- ((1 + input[c, (inp.sundry$shares-f.split+1):inp.sundry$shares])*results.level[c-1, 1:f.split]) #range 1:f.split is used because results level has already been confined to the last 12 columns
+    }
+  }
+  AntiFactor.level <- rowSums(results.level)
+  for(e in 0:(inp.sundry$periods-1)){
+    AntiFactor.returns[(e*inp.sundry$holding)+1] <- (AntiFactor.level[((e*inp.sundry$holding)+1)] - 1)
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      AntiFactor.returns[c] <- (AntiFactor.level[c] - AntiFactor.level[c-1])/AntiFactor.level[c-1]
+    }
+  }
+  return(AntiFactor.returns)
+}
+
+###################################
+# FOR ERC
+
+#  PERC(Sigma, par = NULL, percentage = TRUE, optctrl = ctrl(), ...) sigma is the var covar matrix
+ERC.W <- function(ret.data, instance, inp.sundry){
+  lb <- ret.data[(1+(inp.sundry$holding*(instance-1))):(inp.sundry$lookback+(inp.sundry$holding*(instance-1))-inp.sundry$gap), ]
+  #gives us inp.lookback inp.periods for covar calc
+  # for(x in seq_along(co.var)){
+  #   co.var[[x]] <- cov(lb[[x]])
+  #   erc[[x]] <- PERC(co.var[[x]])
+  # } dont think its necessary
+  co.var <- cov(lb)
+  e <- PERC(co.var, percentage = FALSE)
+  erc <- (as.numeric(e@weights)) #to extract a certain aspect of an S4 class you need to use @ or $
+  return(erc)
+}
+
+#################################
+
+Factor.ret.ercweight <- function(ret.data, setup.results, inp.sundry){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  Factor.returns <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  Factor.level <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  results.level <- setup.results[ , 1:f.split]
+  erc.data <- ret.data[ ,1:f.split]
+  w <- vector(mode = "list", length = inp.sundry$periods)
+  for(e in 0:(inp.sundry$periods-1)){
+    w[[(e+1)]] <- ERC.W(erc.data, (e+1), inp.sundry)
+    results.level[(e*inp.sundry$holding)+1, ] <- (setup.results[(e*inp.sundry$holding)+1, 1:f.split] + 1) * w[[e+1]]
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      results.level[c, ] <- ((1 + setup.results[c, 1:f.split])*results.level[c-1, ])
+    }
+  }
+  Factor.level <- rowSums(results.level)
+  for(e in 0:(inp.sundry$periods-1)){
+    Factor.returns[(e*inp.sundry$holding)+1] <- (Factor.level[((e*inp.sundry$holding)+1)] - 1)
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      Factor.returns[c] <- (Factor.level[c] - Factor.level[c-1])/Factor.level[c-1]
+    }
+  }
+  return(Factor.returns)
+}
+
+
+
+AntiFactor.ret.ercweight <- function(ret.data, setup.results, inp.sundry){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  AntiFactor.returns <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  AntiFactor.level <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  results.level <- setup.results[ , (inp.sundry$shares-f.split+1):inp.sundry$shares]
+  erc.data <- ret.data[ ,(inp.sundry$shares-f.split+1):inp.sundry$shares]
+  w <- vector(mode = "list", length = inp.sundry$periods)
+  for(e in 0:(inp.sundry$periods-1)){
+    w[[(e+1)]] <- ERC.W(erc.data, (e+1), inp.sundry)
+    results.level[(e*inp.sundry$holding)+1, ] <- (setup.results[(e*inp.sundry$holding)+1, (inp.sundry$shares-f.split+1):inp.sundry$shares] + 1) * w[[e+1]]
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      results.level[c, ] <- ((1 + setup.results[c, (inp.sundry$shares-f.split+1):inp.sundry$shares])*results.level[c-1, ])
+    }
+  }
+  AntiFactor.level <- rowSums(results.level)
+  for(e in 0:(inp.sundry$periods-1)){
+    AntiFactor.returns[(e*inp.sundry$holding)+1] <- (AntiFactor.level[((e*inp.sundry$holding)+1)] - 1)
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      AntiFactor.returns[c] <- (AntiFactor.level[c] - AntiFactor.level[c-1])/AntiFactor.level[c-1]
+    }
+  }
+  return(AntiFactor.returns)
+}
+
+graph.weights <- function(levels.data, names.list, inp.sundry, resultsdate){
+  a <- length(names.list)
+  v <- matrix(data = 0, nrow = (inp.sundry$total-inp.sundry$lookback), ncol = a)
+  for(x in 1:a){
+    v[ , x] <- levels.data[[x]]
+  }
+  df.results <- data.frame(v, row.names = as.Date(resultsdate), check.rows = FALSE, check.names = TRUE)
+  colnames(df.results) <- names.list
+  sol <- as.data.frame(df.results) %>%
+    gather(weighting, values)
+  sol$time <- rownames(df.results)
+  d <- plot_ly(sol, x = ~time, y = ~values, type = "scatter", mode = "lines", color = ~weighting) %>%
+    layout(title = "Comparing weightings", xaxis = list(nticks = 10, title = FALSE))
+  return(d)
+}
+
+## additional add ons: cov.wt() calculates weighted covariance matrix. work out what the alternative methods are besides "unbiased" (1/n)
+
+
+ERC.W.v <- function(ret.data, std.err, instance, inp.sundry){
+  lb <- ret.data[(1+(inp.sundry$holding*(instance-1))):(inp.sundry$lookback+(inp.sundry$holding*(instance-1))-inp.sundry$gap), ]
+  lb.w <- std.err[(1+(inp.sundry$holding*(instance-1))):(inp.sundry$lookback+(inp.sundry$holding*(instance-1))-inp.sundry$gap), ]
+  #gives us inp.lookback inp.periods for covar calc
+  # for(x in seq_along(co.var)){
+  #   co.var[[x]] <- cov(lb[[x]])
+  #   erc[[x]] <- PERC(co.var[[x]])
+  # } dont think its necessary
+  if (inp.sundry$weighttype == "unweighted") {
+    co.var <- cov(lb)
+  } else {
+    co.var <- cov.wt(lb, wt = lb.w, method = "unbiased") # weight should be 1/(std error of estimate) std err = std dev/(n^0.5) = vol / volume. ***only works using a weight vector. ie all weights are the same in each row. can use for decay factor but not our method
+  }
+  e <- PERC(co.var, percentage = FALSE)
+  erc <- (as.numeric(e@weights)) #to extract a certain aspect of an S4 class you need to use @ or $
+  return(erc)
+}
+
+Factor.ret.ercweight.w <- function(ret.data, std.err, setup.results, inp.sundry){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  Factor.returns <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  Factor.level <- vector(mode = "double", length = inp.sundry$total-inp.sundry$lookback)
+  results.level <- setup.results[ , 1:f.split]
+  erc.data <- ret.data[ ,1:f.split]
+  w <- vector(mode = "list", length = inp.sundry$periods)
+  for(e in 0:(inp.sundry$periods-1)){
+    w[[(e+1)]] <- ERC.W.m(erc.data, std.err, (e+1), inp.sundry)
+    results.level[(e*inp.sundry$holding)+1, ] <- (setup.results[(e*inp.sundry$holding)+1, 1:f.split] + 1) * w[[e+1]]
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      results.level[c, ] <- ((1 + setup.results[c, 1:f.split])*results.level[c-1, ])
+    }
+  }
+  Factor.level <- rowSums(results.level)
+  for(e in 0:(inp.sundry$periods-1)){
+    Factor.returns[(e*inp.sundry$holding)+1] <- (Factor.level[((e*inp.sundry$holding)+1)] - 1)
+    for(c in ((e*inp.sundry$holding)+2):((e*inp.sundry$holding)+inp.sundry$holding)){
+      Factor.returns[c] <- (Factor.level[c] - Factor.level[c-1])/Factor.level[c-1]
+    }
+  }
+  return(Factor.returns)
+}
+
+
+#################
+
+  
+ERC.W.m<- function(ret.data, std.err, instance, inp.sundry){
+  f.split <- trunc(inp.sundry$psplit*inp.sundry$shares)
+  lb <- ret.data[(1+(inp.sundry$holding*(instance-1))):(inp.sundry$lookback+(inp.sundry$holding*(instance-1))-inp.sundry$gap), ]
+  lb.w <- 1/std.err[(1+(inp.sundry$holding*(instance-1))):(inp.sundry$lookback+(inp.sundry$holding*(instance-1))-inp.sundry$gap), ]
+  co.var <- matrix(data = 0, nrow = f.split, ncol = f.split)
+  for(r in 1:f.split) {
+    for(c in 1:f.split) {
+      co.var[r, c] <- (weighted.sd(lb[ , r], lb.w[ , r]) * weighted.sd(lb[ , c], lb.w[ , c]) * weightedCorr(lb[ , r], lb[ , c], method = "pearson", weights = (lb.w[ , r]*lb.w[ , c])^0.5))
+    } # note here we multiply the two weights and square root for correl. this make two weights that are similar have a higher value than two weights that are far apart (0.1 and 0.9 are less reliable than two 0.5s)
+  }
+  e <- PERC(co.var, percentage = FALSE)
+  erc <- (as.numeric(e@weights)) #to extract a certain aspect of an S4 class you need to use @ or $
+  return(erc)
+}
+
+#########################
+
+ERC.W <- function(ret.data, instance, inp.sundry){
+  lb <- ret.data[(1+(inp.sundry$holding*(instance-1))):(inp.sundry$lookback+(inp.sundry$holding*(instance-1))-inp.sundry$gap), ]
+  #gives us inp.lookback inp.periods for covar calc
+  # for(x in seq_along(co.var)){
+  #   co.var[[x]] <- cov(lb[[x]])
+  #   erc[[x]] <- PERC(co.var[[x]])
+  # } dont think its necessary
+  co.var <- cov(lb)
+  e <- PERC(co.var, percentage = FALSE)
+  erc <- (as.numeric(e@weights)) #to extract a certain aspect of an S4 class you need to use @ or $
+  return(erc)
+}
+
+
+
+
+
+
+##########################
+# 
+# for(instance in 1:(periods-1)){
+#   lb <- Returns[(1+(holding*(instance-1))):(lookback+(holding*(instance-1))-gap), ]
+#   lb.w <- stderr[(1+(holding*(instance-1))):(lookback+(holding*(instance-1))-gap), ]
+#   co.var <- matrix(data = 0, nrow = shares, ncol = shares)
+#   for(r in 1:shares) {
+#     for(c in 1:shares) {
+#       co.var[r, c] <- (weighted.sd(lb[ , r], lb.w[ , r]) * weighted.sd(lb[ , c], lb.w[ , c]) * weightedCorr(lb[ , r], lb[ , c], method = "pearson"))
+#     }
+#   }
+#   e <- PERC(co.var, percentage = FALSE)
+#   erc <- (as.numeric(e@weights)) #to extract a certain aspect of an S4 class you need to use @ or $
+#   #return(erc)
+#   return(co.var)
+# }
+
+
+## use shiny-plotly combo to make interactive dashboards
+## create churn and rolling cross-section std dev stats
